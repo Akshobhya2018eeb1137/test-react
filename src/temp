@@ -1,0 +1,84 @@
+#pragma once
+#ifndef NNET_DATA
+#define NNET_DATA
+
+#include<stdio.h>
+#include <android/log.h>
+// #define DEBUG_DEVICE_PROFILE
+#define  LOGE(LOG_TAG, ...)  //__android_log_print(ANDROID_LOG_ERROR,LOG_TAG,__VA_ARGS__)
+#define  LOGW(LOG_TAG, ...)  //__android_log_print(ANDROID_LOG_WARN,LOG_TAG,__VA_ARGS__)
+#define  LOGV(...) 			__android_log_print(ANDROID_LOG_INFO, "[AJB_NET]", __VA_ARGS__)
+#define  LOGI(LOG_TAG, ...)  __android_log_print(ANDROID_LOG_INFO,LOG_TAG,__VA_ARGS__)
+#define  LOGNULL(LOG_TAG, ...)  
+
+// #define DEBUG_DEVICE_PROFILE
+#define  LOGE(LOG_TAG, ...)  //__android_log_print(ANDROID_LOG_ERROR,LOG_TAG,__VA_ARGS__)
+#define  LOGW(LOG_TAG, ...)  //__android_log_print(ANDROID_LOG_WARN,LOG_TAG,__VA_ARGS__)
+#define  LOGV(...) 			__android_log_print(ANDROID_LOG_INFO, "[AJB_NET]", __VA_ARGS__)
+#define  LOGI(LOG_TAG, ...)  __android_log_print(ANDROID_LOG_INFO,LOG_TAG,__VA_ARGS__)
+#define  LOGNULL(LOG_TAG, ...)  
+
+#define dbg LOGV("pass at line = %d\n", __LINE__);
+#define dbf LOGV("[DENSE]--------> ok at line = %d\n");
+#define armneon
+
+
+#include<arm_neon.h>
+#include<stdlib.h>
+
+float MAX(float a, float b){
+    return a > b ? a  : b;
+}
+
+float32x4_t out_temp;
+float32x2_t sum_lane;
+#define dot(dot_output, input_section, kernel_section, initialise_out_temp_constant) out_temp = vdupq_n_f32(initialise_out_temp_constant); out_temp = vmlaq_f32(out_temp, input_section, kernel_section); sum_lane = vpadd_f32(vget_low_f32(out_temp), vget_high_f32(out_temp)); sum_lane = vpadd_f32(sum_lane, sum_lane); vst1_lane_f32(&dot_output, sum_lane, 0)
+
+void cnn_3xkc(float* inp, float* kernel, float* bias, float* res, int row, int col, int kr, int kc, int nk)//kc == col and kr == 3
+{
+    for(int i = 0; i < row - 2; i++){
+        for(int j = 0; j < col; j += 4){
+            float32x4_t ip1 =  vld1q_f32(&inp[i * col + j]); //load inp[i][j]
+            float32x4_t ip2 =  vld1q_f32(&inp[(i + 1) * col + j]); // load inp[i + 1][j]
+            float32x4_t ip3 =  vld1q_f32(&inp[(i + 2) * col + j]); // load inp[i + 2][j]
+            for(int k = 0; k < nk; k++){
+                float32x4_t k1 =  vld1q_f32(&kernel[k * kr * kc + 0 * kc + j]); //load kernel this is kernel[k][0][j]
+                float32x4_t k2 =  vld1q_f32(&kernel[k * kr * kc + 1 * kc + j]); //load kernel this is kernel[k][1][j]
+                float32x4_t k3 =  vld1q_f32(&kernel[k * kr * kc + 2 * kc + j]); //load kernel this is kernel[k][2][j]
+                float dot1, dot2, dot3;
+                dot1 = dot2 = dot3 = 0;
+                dot(dot1, ip1, k1, 0);
+                dot(dot2, ip2, k2, 0);
+                dot(dot3, ip3, k3, 0);
+                res[i * nk + k] += dot1 + dot2 + dot3;   // res[i][k]
+            }
+        }
+    }
+    for(int i = 0; i < row - 2; i++){
+        for(int j = 0; j < nk; j++){
+            res[i * nk + j] += bias[j]; 
+            res[i * nk + j] = res[i * nk + j] > 0 ? res[i * nk + j] : 0;  //res[i][k]
+        }
+    }
+}
+
+void maxPooling1D(float* inp, float* res, int row, int col)
+{
+    for(int i = 0; i < col; i++)
+        for(int j = 0; j < row; j += 2)
+            res[(j / 2) * col + i] = MAX(inp[j * col + i], inp[(j + 1) * col + i]);
+}
+
+void dense(float* inp, float* kernel, float* bias, float* res, int weight_row, int weight_col)
+{
+    for(int i = 0; i < weight_col; i += 4){
+        float32x4_t input =  vld1q_f32(&inp[i]); 
+        for(int j = 0; j < weight_row; j++){
+            float32x4_t weight = vld1q_f32(&kernel[j * weight_col + i]); 
+            float sum = 0;
+            dot(sum, input, weight, bias[j]/ weight_col);
+            res[j] += sum;
+            if(i == weight_col - 4)res[j] = res[j] > 0 ? res[j] : 0;
+        }
+    }
+}
